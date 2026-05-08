@@ -1,0 +1,34 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    border-color: #1e3a1e;
+  }
+
+  body {
+    margin: 0;
+    background-color: #050a05;
+    color: #f9fafb;
+    font-family: Inter, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  #root {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+}
+
+@layer utilities {
+  .card {
+    @apply bg-surface border border-border rounded-lg;
+  }
+
+  .pitch-line {
+    border-color: rgba(34, 197, 94, 0.2);
+  }
+}
