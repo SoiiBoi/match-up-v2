@@ -112,11 +112,13 @@ export function useActiveGame() {
     queryFn: async (): Promise<ActiveGameData | null> => {
       if (!user) return null
 
-      // Find the user's current team membership
+      // Find the user's current team membership (most recent, handles multiple old rows)
       const { data: membership } = await supabase
         .from('team_members')
         .select('team_id')
         .eq('user_id', user.id)
+        .order('joined_at', { ascending: false })
+        .limit(1)
         .maybeSingle()
       if (!membership) return null
 
