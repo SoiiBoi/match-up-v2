@@ -18,6 +18,7 @@ type Tab = 'friends' | 'requests' | 'invites' | 'search'
 export default function FriendsPage() {
   const [tab, setTab] = useState<Tab>('friends')
   const [searchQuery, setSearchQuery] = useState('')
+  const [sentIds, setSentIds] = useState<Set<string>>(new Set())
 
   const { data: friends = [], refetch: refetchFriends } = useFriendsList()
   const { data: requests = [], refetch: refetchRequests } = useFriendRequests()
@@ -202,11 +203,12 @@ export default function FriendsPage() {
               )}
               <Button
                 size="sm"
-                variant="outline"
+                variant={sentIds.has(p.id) ? 'ghost' : 'outline'}
+                disabled={sentIds.has(p.id)}
                 loading={sendRequest.isPending}
-                onClick={() => sendRequest.mutate(p.id)}
+                onClick={() => sendRequest.mutate(p.id, { onSuccess: () => setSentIds((prev) => new Set(prev).add(p.id)) })}
               >
-                Add
+                {sentIds.has(p.id) ? '✓ Added' : 'Add'}
               </Button>
             </Card>
           ))}

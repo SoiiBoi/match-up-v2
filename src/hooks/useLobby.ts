@@ -1,7 +1,15 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/services/supabase'
 import { useAuth } from '@/contexts/AuthContext'
-import type { Party, PartyMember, Friendship } from '@/types'
+import { useToast } from '@/components/ui/toast'
+import type { Party, PartyMember, Friendship, Position } from '@/types'
+
+const ALL_POSITIONS: Position[] = ['GK', 'ST', 'LW', 'RW', 'CM', 'LB', 'RB']
+
+function pickPosition(profilePos: Position | null, taken: (Position | null)[]): Position | null {
+  if (profilePos && !taken.includes(profilePos)) return profilePos
+  return ALL_POSITIONS.find((p) => !taken.includes(p)) ?? null
+}
 
 export function useCurrentParty() {
   const { user } = useAuth()
@@ -14,6 +22,7 @@ export function useCurrentParty() {
         .select('party_id, party:parties!inner(id, leader_id, status, created_at, updated_at)')
         .eq('user_id', user.id)
         .eq('party.status', 'active')
+        .limit(1)
         .maybeSingle()
       if (!data) return null
       return data.party as unknown as Party
@@ -30,10 +39,14 @@ export function usePartyMembers(partyId: string | undefined) {
       if (!partyId) return []
       const { data, error } = await supabase
         .from('party_members')
-        .select('*, profile:profiles(*)')
+        .select('*')
         .eq('party_id', partyId)
       if (error) throw error
-      return (data ?? []) as PartyMember[]
+      if (!data?.length) return []
+      const ids = data.map((m) => m.user_id)
+      const { data: profiles } = await supabase.from('profiles').select('*').in('id', ids)
+      const byId = Object.fromEntries((profiles ?? []).map((p) => [p.id, p]))
+      return data.map((m) => ({ ...m, profile: byId[m.user_id] ?? null })) as PartyMember[]
     },
     enabled: !!partyId,
     refetchInterval: 5000,
@@ -46,6 +59,13 @@ export function useCreateParty() {
   return useMutation({
     mutationFn: async () => {
       if (!user) throw new Error('Not authenticated')
+
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('preferred_position')
+        .eq('id', user.id)
+        .single()
+
       const { data: party, error: pe } = await supabase
         .from('parties')
         .insert({ leader_id: user.id })
@@ -53,9 +73,10 @@ export function useCreateParty() {
         .single()
       if (pe) throw pe
 
+      const position = pickPosition(profile?.preferred_position ?? null, [])
       const { error: me } = await supabase
         .from('party_members')
-        .insert({ party_id: party.id, user_id: user.id, status: 'ready' })
+        .insert({ party_id: party.id, user_id: user.id, status: 'ready', preferred_position: position })
       if (me) throw me
 
       return party as Party
@@ -66,17 +87,20 @@ export function useCreateParty() {
 
 export function useLeaveParty() {
   const { user } = useAuth()
+  const { toast } = useToast()
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (partyId: string) => {
       if (!user) throw new Error('Not authenticated')
-      await supabase.from('party_members').delete().eq('party_id', partyId).eq('user_id', user.id)
-      const { count } = await supabase.from('party_members').select('*', { count: 'exact', head: true }).eq('party_id', partyId)
-      if (!count) {
-        await supabase.from('parties').update({ status: 'disbanded' }).eq('id', partyId)
-      }
+      const { error } = await supabase
+        .from('party_members')
+        .delete()
+        .eq('party_id', partyId)
+        .eq('user_id', user.id)
+      if (error) throw error
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['lobby'] }),
+    onError: (err) => toast(err instanceof Error ? err.message : 'Failed to leave party', 'error'),
   })
 }
 
@@ -109,6 +133,23 @@ export function useInviteFriend() {
   })
 }
 
+export function useSelectPosition() {
+  const { user } = useAuth()
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ partyId, position }: { partyId: string; position: Position | null }) => {
+      if (!user) throw new Error('Not authenticated')
+      const { error } = await supabase
+        .from('party_members')
+        .update({ preferred_position: position })
+        .eq('party_id', partyId)
+        .eq('user_id', user.id)
+      if (error) throw error
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['lobby', 'members'] }),
+  })
+}
+
 export function useFriendsForInvite(partyMembers: PartyMember[]) {
   const { user } = useAuth()
   return useQuery({
@@ -117,9 +158,13 @@ export function useFriendsForInvite(partyMembers: PartyMember[]) {
       if (!user) return []
       const { data } = await supabase
         .from('friendships')
-        .select('*, profile:profiles!friendships_friend_id_fkey(*)')
+        .select('*')
         .eq('user_id', user.id)
-      return (data ?? []) as Friendship[]
+      if (!data?.length) return []
+      const ids = data.map((f) => f.friend_id)
+      const { data: profiles } = await supabase.from('profiles').select('*').in('id', ids)
+      const byId = Object.fromEntries((profiles ?? []).map((p) => [p.id, p]))
+      return data.map((f) => ({ ...f, profile: byId[f.friend_id] ?? null })) as Friendship[]
     },
     enabled: !!user,
     select: (data) => data.filter((f) => !partyMembers.some((m) => m.user_id === f.friend_id)),

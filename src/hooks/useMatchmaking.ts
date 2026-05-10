@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/services/supabase'
 import { useAuth } from '@/contexts/AuthContext'
-import type { Position, QueueEntry } from '@/types'
+import type { Position, QueueEntry, Match } from '@/types'
 
 export function useQueueStatus() {
   const { user } = useAuth()
@@ -45,15 +45,56 @@ export function useLeaveQueue() {
   const { user } = useAuth()
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async () => {
+    mutationFn: async (partyId?: string) => {
       if (!user) throw new Error('Not authenticated')
-      const { error } = await supabase
-        .from('matchmaking_queue')
-        .delete()
-        .eq('user_id', user.id)
-      if (error) throw error
+      if (partyId) {
+        const { error } = await supabase.rpc('cancel_party_queue', { party_uuid: partyId })
+        if (error) throw error
+      } else {
+        const { error } = await supabase.from('matchmaking_queue').delete().eq('user_id', user.id)
+        if (error) throw error
+      }
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['queue'] }),
+  })
+}
+
+export function useActiveMatch() {
+  const { user } = useAuth()
+  return useQuery({
+    queryKey: ['active-match', user?.id],
+    queryFn: async () => {
+      if (!user) return null
+      const { data: membership } = await supabase
+        .from('team_members')
+        .select('team_id')
+        .eq('user_id', user.id)
+        .limit(1)
+        .maybeSingle()
+      if (!membership) return null
+
+      const { data: team } = await supabase
+        .from('teams')
+        .select('match_id')
+        .eq('id', membership.team_id)
+        .in('status', ['ready', 'in_match'])
+        .maybeSingle()
+      if (!team?.match_id) return null
+
+      const { data: match } = await supabase
+        .from('matches')
+        .select(`
+          *,
+          team_a:teams!matches_team_a_id_fkey(id, status, members:team_members(*, profile:profiles(*))),
+          team_b:teams!matches_team_b_id_fkey(id, status, members:team_members(*, profile:profiles(*)))
+        `)
+        .eq('id', team.match_id)
+        .in('status', ['scheduled', 'in_progress'])
+        .maybeSingle()
+      return match as Match | null
+    },
+    enabled: !!user,
+    refetchInterval: 5000,
   })
 }
 

@@ -3,8 +3,11 @@ import { useSearchParams } from 'react-router-dom'
 import { Users, UserPlus, CheckCircle, Circle, LogOut, Zap, Clock } from 'lucide-react'
 import {
   useCurrentParty, usePartyMembers, useCreateParty,
-  useLeaveParty, useToggleReady, useInviteFriend, useFriendsForInvite,
+  useLeaveParty, useToggleReady, useInviteFriend, useFriendsForInvite, useSelectPosition,
 } from '@/hooks/useLobby'
+import { useFriendsList, useSendFriendRequest } from '@/hooks/useFriends'
+import { useProfile } from '@/hooks/useProfile'
+import PositionPitchOverlay from './PositionPitchOverlay'
 import { useJoinQueue, useLeaveQueue, useQueueStatus, useJoinQueueAsParty } from '@/hooks/useMatchmaking'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/components/ui/toast'
@@ -20,31 +23,50 @@ export default function LobbyPage() {
   const [searchParams] = useSearchParams()
   const quickMode = searchParams.get('quick') === '1'
 
+  const { data: profile } = useProfile()
   const { data: party } = useCurrentParty()
   const { data: members = [] } = usePartyMembers(party?.id)
   const { data: queueEntry } = useQueueStatus()
   const { data: friendsToInvite = [] } = useFriendsForInvite(members)
+  const { data: friendsList = [] } = useFriendsList()
 
   const createParty = useCreateParty()
   const leaveParty = useLeaveParty()
   const toggleReady = useToggleReady()
   const inviteFriend = useInviteFriend()
+  const selectPosition = useSelectPosition()
   const joinQueue = useJoinQueue()
   const leaveQueue = useLeaveQueue()
   const joinQueueAsParty = useJoinQueueAsParty()
+  const sendFriendRequest = useSendFriendRequest()
 
   const [selectedPosition, setSelectedPosition] = useState<Position>('CM')
+  const [positionSet, setPositionSet] = useState(false)
   const [anyRole, setAnyRole] = useState(false)
-  const [waitSeconds, setWaitSeconds] = useState(0)
+  const [tick, setTick] = useState(0)
+  const [showPitchPicker, setShowPitchPicker] = useState(false)
+  const [invitedIds, setInvitedIds] = useState<Set<string>>(new Set())
+  const [addedIds, setAddedIds] = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    if (!positionSet && profile?.preferred_position) {
+      setSelectedPosition(profile.preferred_position as Position)
+      setPositionSet(true)
+    }
+  }, [profile?.preferred_position, positionSet])
 
   const isLeader = party?.leader_id === user?.id
   const myMember = members.find((m) => m.user_id === user?.id)
   const allReady = members.length > 0 && members.every((m) => m.status === 'ready')
   const inQueue = !!queueEntry
 
+  const waitSeconds = queueEntry
+    ? Math.max(0, Math.floor((Date.now() - new Date(queueEntry.joined_at).getTime()) / 1000))
+    : 0
+
   useEffect(() => {
-    if (!inQueue) { setWaitSeconds(0); return }
-    const interval = setInterval(() => setWaitSeconds((s) => s + 1), 1000)
+    if (!inQueue) return
+    const interval = setInterval(() => setTick((t) => t + 1), 1000)
     return () => clearInterval(interval)
   }, [inQueue])
 
@@ -72,7 +94,7 @@ export default function LobbyPage() {
 
   async function handleLeaveQueue() {
     try {
-      await leaveQueue.mutateAsync()
+      await leaveQueue.mutateAsync(queueEntry?.party_id ?? undefined)
       toast('Left the queue', 'info')
     } catch {
       toast('Failed to leave queue', 'error')
@@ -85,6 +107,7 @@ export default function LobbyPage() {
       position={queueEntry.preferred_position}
       isParty={!!queueEntry.party_id}
       partySize={members.length}
+      canCancel={!queueEntry.party_id || isLeader}
       onCancel={handleLeaveQueue}
       cancelling={leaveQueue.isPending}
     />
@@ -167,24 +190,44 @@ export default function LobbyPage() {
             </CardHeader>
             <CardContent>
               <div className="flex flex-col gap-2">
-                {members.map((m) => (
-                  <div key={m.id} className="flex items-center gap-3 py-1">
-                    <div className="w-9 h-9 rounded-full bg-primary/20 border border-primary/30 flex items-center justify-center text-primary text-xs font-bold flex-shrink-0">
-                      {getInitials(m.profile?.full_name || m.profile?.username || 'P')}
+                {members.map((m) => {
+                  const isMe = m.user_id === user?.id
+                  const isFriend = friendsList.some((f) => f.friend_id === m.user_id)
+                  const alreadyAdded = addedIds.has(m.user_id)
+                  return (
+                    <div key={m.id} className="flex items-center gap-3 py-1">
+                      <div className="w-9 h-9 rounded-full bg-primary/20 border border-primary/30 flex items-center justify-center text-primary text-xs font-bold flex-shrink-0">
+                        {getInitials(m.profile?.full_name || m.profile?.username || 'P')}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-white truncate">{m.profile?.full_name || m.profile?.username}</p>
+                        {party.leader_id === m.user_id && <span className="text-xs text-primary">Leader</span>}
+                      </div>
+                      {!isMe && !isFriend && (
+                        <button
+                          disabled={alreadyAdded || sendFriendRequest.isPending}
+                          onClick={() => sendFriendRequest.mutate(m.user_id, {
+                            onSuccess: () => setAddedIds((prev) => new Set(prev).add(m.user_id)),
+                          })}
+                          className={`text-xs px-2 py-0.5 rounded border transition-colors flex-shrink-0 ${
+                            alreadyAdded
+                              ? 'border-primary/30 text-primary cursor-default'
+                              : 'border-border text-muted hover:border-primary hover:text-primary'
+                          }`}
+                        >
+                          {alreadyAdded ? '✓' : '+ Add'}
+                        </button>
+                      )}
+                      {m.preferred_position && (
+                        <Badge variant="position" position={m.preferred_position as Position}>{m.preferred_position}</Badge>
+                      )}
+                      {m.status === 'ready'
+                        ? <CheckCircle size={16} className="text-primary flex-shrink-0" />
+                        : <Circle size={16} className="text-muted flex-shrink-0" />
+                      }
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-white truncate">{m.profile?.full_name || m.profile?.username}</p>
-                      {party.leader_id === m.user_id && <span className="text-xs text-primary">Leader</span>}
-                    </div>
-                    {m.preferred_position && (
-                      <Badge variant="position" position={m.preferred_position as Position}>{m.preferred_position}</Badge>
-                    )}
-                    {m.status === 'ready'
-                      ? <CheckCircle size={16} className="text-primary flex-shrink-0" />
-                      : <Circle size={16} className="text-muted flex-shrink-0" />
-                    }
-                  </div>
-                ))}
+                  )
+                })}
                 {Array.from({ length: 7 - members.length }).map((_, i) => (
                   <div key={i} className="flex items-center gap-3 py-1 opacity-30">
                     <div className="w-9 h-9 rounded-full border border-dashed border-border flex items-center justify-center">
@@ -194,6 +237,23 @@ export default function LobbyPage() {
                   </div>
                 ))}
               </div>
+
+              {/* My position picker */}
+              {myMember && (
+                <button
+                  onClick={() => setShowPitchPicker(true)}
+                  className="mt-3 pt-3 border-t border-border w-full flex items-center justify-between hover:opacity-80 transition-opacity"
+                >
+                  <span className="text-sm text-muted">My Position</span>
+                  {myMember.preferred_position ? (
+                    <Badge variant="position" position={myMember.preferred_position as Position}>
+                      {myMember.preferred_position}
+                    </Badge>
+                  ) : (
+                    <span className="text-sm text-yellow-400 font-medium">Tap to pick →</span>
+                  )}
+                </button>
+              )}
             </CardContent>
           </Card>
 
@@ -220,29 +280,54 @@ export default function LobbyPage() {
             </Button>
           )}
 
+          {/* Position pitch overlay */}
+          {showPitchPicker && party && user && (
+            <PositionPitchOverlay
+              members={members}
+              currentUserId={user.id}
+              partyId={party.id}
+              selecting={selectPosition.isPending}
+              onSelect={async (pos) => {
+                await selectPosition.mutateAsync({ partyId: party.id, position: pos })
+                setShowPitchPicker(false)
+              }}
+              onClose={() => setShowPitchPicker(false)}
+            />
+          )}
+
           {/* Invite friends */}
-          {friendsToInvite.length > 0 && members.length < 7 && (
+          {members.length < 7 && (
             <Card>
               <CardHeader><CardTitle className="flex items-center gap-2"><UserPlus size={16} /> Invite Friends</CardTitle></CardHeader>
               <CardContent>
-                <div className="flex flex-col gap-2">
-                  {friendsToInvite.map(({ friend_id, profile }) => (
-                    <div key={friend_id} className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-surface-2 border border-border flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
-                        {getInitials(profile?.full_name || profile?.username || 'P')}
+                {friendsToInvite.length === 0 ? (
+                  <p className="text-sm text-muted text-center py-2">
+                    No friends to invite yet. Go to <strong className="text-white">Friends → Search</strong> to add players first.
+                  </p>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    {friendsToInvite.map(({ friend_id, profile: friendProfile }) => (
+                      <div key={friend_id} className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-surface-2 border border-border flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+                          {getInitials(friendProfile?.full_name || friendProfile?.username || 'P')}
+                        </div>
+                        <span className="text-sm text-white flex-1 truncate">{friendProfile?.full_name || friendProfile?.username}</span>
+                        <Button
+                          size="sm"
+                          variant={invitedIds.has(friend_id) ? 'ghost' : 'outline'}
+                          disabled={invitedIds.has(friend_id)}
+                          loading={inviteFriend.isPending}
+                          onClick={() => inviteFriend.mutate(
+                            { friendId: friend_id, partyId: party.id },
+                            { onSuccess: () => setInvitedIds((prev) => new Set(prev).add(friend_id)) }
+                          )}
+                        >
+                          {invitedIds.has(friend_id) ? '✓ Invited' : 'Invite'}
+                        </Button>
                       </div>
-                      <span className="text-sm text-white flex-1 truncate">{profile?.full_name || profile?.username}</span>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => inviteFriend.mutate({ friendId: friend_id, partyId: party.id })}
-                        loading={inviteFriend.isPending}
-                      >
-                        Invite
-                      </Button>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
               </CardContent>
             </Card>
           )}
@@ -253,10 +338,10 @@ export default function LobbyPage() {
 }
 
 function MatchFindingScreen({
-  waitSeconds, position, isParty, partySize, onCancel, cancelling,
+  waitSeconds, position, isParty, partySize, canCancel, onCancel, cancelling,
 }: {
   waitSeconds: number; position: Position; isParty: boolean; partySize: number
-  onCancel: () => void; cancelling: boolean
+  canCancel: boolean; onCancel: () => void; cancelling: boolean
 }) {
   const mins = Math.floor(waitSeconds / 60)
   const secs = waitSeconds % 60
@@ -282,9 +367,13 @@ function MatchFindingScreen({
         </span>
       </div>
       <p className="text-xs text-muted">Estimated wait: 3–10 minutes</p>
-      <Button variant="destructive" onClick={onCancel} loading={cancelling}>
-        Cancel Search
-      </Button>
+      {canCancel ? (
+        <Button variant="destructive" onClick={onCancel} loading={cancelling}>
+          Cancel Search
+        </Button>
+      ) : (
+        <p className="text-xs text-muted">Only the party leader can cancel</p>
+      )}
     </div>
   )
 }

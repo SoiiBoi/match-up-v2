@@ -1,5 +1,6 @@
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowLeft, RefreshCw, Play, Users } from 'lucide-react'
+import { ArrowLeft, RefreshCw, Play, Users, Search, X, Crown } from 'lucide-react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/services/supabase'
 import { useIsAdmin } from '@/hooks/useProfile'
@@ -7,8 +8,9 @@ import { useToast } from '@/components/ui/toast'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { getInitials, formatDate } from '@/lib/utils'
-import type { Position, Profile, UserRole } from '@/types'
+import { Input } from '@/components/ui/input'
+import { getInitials, formatDate, POSITIONS } from '@/lib/utils'
+import type { Position, Profile } from '@/types'
 
 export default function AdminPage() {
   const navigate = useNavigate()
@@ -16,34 +18,54 @@ export default function AdminPage() {
   const { toast } = useToast()
   const qc = useQueryClient()
 
-  const { data: users = [], refetch: refetchUsers } = useQuery({
-    queryKey: ['admin', 'users'],
+  const [searchQuery, setSearchQuery] = useState('')
+  const [userPositions, setUserPositions] = useState<Map<string, Position>>(new Map())
+  const [testParty, setTestParty] = useState<Array<{ userId: string; username: string; position: Position }>>([])
+  const [testPartyLeaderId, setTestPartyLeaderId] = useState<string | null>(null)
+
+  const { data: totalUsers = 0 } = useQuery({
+    queryKey: ['admin', 'user-count'],
     queryFn: async () => {
-      const { data, error } = await supabase.from('profiles').select('*').order('created_at', { ascending: false })
+      const { count } = await supabase.from('profiles').select('*', { count: 'exact', head: true })
+      return count ?? 0
+    },
+    enabled: !!isAdmin,
+  })
+
+  const { data: searchResults = [] } = useQuery({
+    queryKey: ['admin', 'search', searchQuery],
+    queryFn: async () => {
+      if (searchQuery.length < 2) return []
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .or(`username.ilike.%${searchQuery}%,full_name.ilike.%${searchQuery}%`)
+        .limit(20)
       if (error) throw error
       return data as Profile[]
     },
-    enabled: !!isAdmin,
+    enabled: searchQuery.length >= 2 && !!isAdmin,
   })
 
-  const { data: roles = [] } = useQuery({
-    queryKey: ['admin', 'roles'],
-    queryFn: async () => {
-      const { data } = await supabase.from('user_roles').select('*')
-      return (data ?? []) as UserRole[]
-    },
-    enabled: !!isAdmin,
-  })
-
-  const { data: queueCount = 0 } = useQuery({
+  const { data: queueEntries = [] } = useQuery({
     queryKey: ['admin', 'queue'],
     queryFn: async () => {
-      const { count } = await supabase.from('matchmaking_queue').select('*', { count: 'exact', head: true }).eq('status', 'waiting')
-      return count ?? 0
+      const { data, error } = await supabase
+        .from('matchmaking_queue')
+        .select('*')
+        .eq('status', 'waiting')
+        .order('created_at', { ascending: true })
+      if (error) throw error
+      if (!data?.length) return []
+      const ids = data.map((e) => e.user_id)
+      const { data: profiles } = await supabase.from('profiles').select('id, username, full_name, preferred_position').in('id', ids)
+      const byId = Object.fromEntries((profiles ?? []).map((p) => [p.id, p]))
+      return data.map((e) => ({ ...e, profile: byId[e.user_id] ?? null }))
     },
     enabled: !!isAdmin,
     refetchInterval: 5000,
   })
+  const queueCount = queueEntries.length
 
   const triggerMatchmaking = useMutation({
     mutationFn: async () => {
@@ -66,13 +88,76 @@ export default function AdminPage() {
     onError: (err) => toast(err instanceof Error ? err.message : 'Failed', 'error'),
   })
 
-  const promoteAdmin = useMutation({
-    mutationFn: async (userId: string) => {
-      const { error } = await supabase.from('user_roles').upsert({ user_id: userId, role: 'admin' })
+  const cancelAllQueue = useMutation({
+    mutationFn: async () => {
+      const { error } = await supabase.from('matchmaking_queue').delete().eq('status', 'waiting')
       if (error) throw error
     },
-    onSuccess: () => { toast('Admin role granted', 'success'); qc.invalidateQueries({ queryKey: ['admin', 'roles'] }) },
+    onSuccess: () => {
+      toast('Queue cleared', 'success')
+      qc.invalidateQueries({ queryKey: ['admin', 'queue'] })
+    },
+    onError: (err) => toast(err instanceof Error ? err.message : 'Failed', 'error'),
   })
+
+  const addUserToQueue = useMutation({
+    mutationFn: async ({ userId, position }: { userId: string; position: Position }) => {
+      await supabase.from('matchmaking_queue').delete().eq('user_id', userId)
+      const { error } = await supabase.from('matchmaking_queue').insert({
+        user_id: userId,
+        preferred_position: position,
+        any_role: false,
+        party_id: null,
+      })
+      if (error) throw error
+    },
+    onSuccess: (_, { position }) => {
+      toast(`Added to queue as ${position}`, 'success')
+      qc.invalidateQueries({ queryKey: ['admin', 'queue'] })
+    },
+    onError: (err) => toast(err instanceof Error ? err.message : 'Failed', 'error'),
+  })
+
+  const queueTestParty = useMutation({
+    mutationFn: async () => {
+      if (!testParty.length) throw new Error('Party is empty')
+      const partyId = crypto.randomUUID()
+      const { error: partyErr } = await supabase
+        .from('parties')
+        .insert({ id: partyId, status: 'in_queue', leader_id: testPartyLeaderId })
+      if (partyErr) throw partyErr
+      await supabase.from('matchmaking_queue').delete().in('user_id', testParty.map((m) => m.userId))
+      const { error } = await supabase.from('matchmaking_queue').insert(
+        testParty.map((m) => ({
+          user_id: m.userId,
+          preferred_position: m.position,
+          any_role: false,
+          party_id: partyId,
+        }))
+      )
+      if (error) throw error
+      setTestParty([])
+      setTestPartyLeaderId(null)
+    },
+    onSuccess: () => {
+      toast(`Party of ${testParty.length} queued!`, 'success')
+      qc.invalidateQueries({ queryKey: ['admin', 'queue'] })
+    },
+    onError: (err) => toast(err instanceof Error ? err.message : 'Failed', 'error'),
+  })
+
+  function getPositionForUser(u: Profile): Position {
+    return userPositions.get(u.id) ?? (u.preferred_position as Position) ?? POSITIONS[0]
+  }
+
+  const PARTY_COLORS = [
+    'text-yellow-400', 'text-blue-400', 'text-purple-400', 'text-pink-400',
+    'text-orange-400', 'text-teal-400', 'text-red-400', 'text-cyan-400',
+  ]
+  const partyIds = [...new Set(queueEntries.filter((e) => e.party_id).map((e) => e.party_id as string))]
+  const partyColorMap: Record<string, string> = Object.fromEntries(
+    partyIds.map((id, i) => [id, PARTY_COLORS[i % PARTY_COLORS.length]])
+  )
 
   if (checkingAdmin) return null
   if (!isAdmin) {
@@ -91,24 +176,20 @@ export default function AdminPage() {
           <ArrowLeft size={20} />
         </button>
         <h1 className="text-xl font-bold text-white flex-1">Admin Panel</h1>
-        <button onClick={() => refetchUsers()} className="text-muted hover:text-white transition-colors">
+        <button onClick={() => qc.invalidateQueries({ queryKey: ['admin'] })} className="text-muted hover:text-white transition-colors">
           <RefreshCw size={18} />
         </button>
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-2 gap-2">
         <Card className="text-center py-3">
-          <p className="text-2xl font-bold text-white">{users.length}</p>
+          <p className="text-2xl font-bold text-white">{totalUsers}</p>
           <p className="text-xs text-muted">Total Users</p>
         </Card>
         <Card className="text-center py-3">
           <p className="text-2xl font-bold text-yellow-400">{queueCount}</p>
           <p className="text-xs text-muted">In Queue</p>
-        </Card>
-        <Card className="text-center py-3">
-          <p className="text-2xl font-bold text-primary">{roles.length}</p>
-          <p className="text-xs text-muted">Admins</p>
         </Card>
       </div>
 
@@ -119,37 +200,187 @@ export default function AdminPage() {
           <p className="text-sm text-muted mb-3">
             {queueCount} player{queueCount !== 1 ? 's' : ''} waiting. Need 7 to form a team, 14 (2 teams) to create a match.
           </p>
-          <Button className="w-full" onClick={() => triggerMatchmaking.mutate()} loading={triggerMatchmaking.isPending}>
-            <Play size={16} /> Process Queue Now
-          </Button>
+          <div className="flex gap-2">
+            <Button className="flex-1" onClick={() => triggerMatchmaking.mutate()} loading={triggerMatchmaking.isPending}>
+              <Play size={16} /> Process Queue Now
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={queueCount === 0}
+              loading={cancelAllQueue.isPending}
+              onClick={() => cancelAllQueue.mutate()}
+            >
+              Cancel All
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
-      {/* User list */}
+      {/* Queue list */}
       <Card>
-        <CardHeader><CardTitle className="flex items-center gap-2"><Users size={16} /> All Users</CardTitle></CardHeader>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><Users size={16} /> Queue ({queueCount})</CardTitle>
+        </CardHeader>
         <CardContent>
-          <div className="flex flex-col gap-2">
-            {users.map((u) => {
-              const userRole = roles.find((r) => r.user_id === u.id)
-              return (
-                <div key={u.id} className="flex items-center gap-3 py-1">
-                  <div className="w-9 h-9 rounded-full bg-surface-2 border border-border flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
-                    {getInitials(u.full_name || u.username)}
+          {queueEntries.length === 0 ? (
+            <p className="text-sm text-muted text-center py-3">Queue is empty.</p>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {queueEntries.map((e, i) => (
+                <div key={e.id} className="flex items-center gap-3 py-1">
+                  <span className="text-xs text-muted w-5 text-right flex-shrink-0">{i + 1}</span>
+                  <div className="w-8 h-8 rounded-full bg-surface-2 border border-border flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+                    {getInitials(e.profile?.full_name || e.profile?.username || '?')}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-white truncate">{u.full_name || u.username}</p>
-                    <p className="text-xs text-muted">@{u.username} · {formatDate(u.created_at)}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {u.preferred_position && (
-                      <Badge variant="position" position={u.preferred_position as Position}>{u.preferred_position}</Badge>
+                    <p className="text-sm text-white truncate">@{e.profile?.username ?? '?'}</p>
+                    {e.party_id && (
+                      <p className={`text-xs font-semibold ${partyColorMap[e.party_id] ?? 'text-primary'}`}>
+                        Party {partyIds.indexOf(e.party_id) + 1}
+                      </p>
                     )}
-                    {userRole ? (
-                      <Badge variant="success">{userRole.role}</Badge>
-                    ) : (
-                      <Button size="sm" variant="ghost" onClick={() => promoteAdmin.mutate(u.id)}>
-                        Make Admin
+                  </div>
+                  <Badge variant="position" position={e.preferred_position as Position}>
+                    {e.any_role ? 'ANY' : e.preferred_position}
+                  </Badge>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Test Party staging area */}
+      {testParty.length > 0 && (
+        <Card className="border-primary/40">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-primary">
+              <Users size={16} /> Test Party ({testParty.length}/7)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-col gap-2 mb-3">
+              {testParty.map((m) => (
+                <div key={m.userId} className="flex items-center gap-3 py-1">
+                  <div className="w-8 h-8 rounded-full bg-primary/20 border border-primary/30 flex items-center justify-center text-primary text-xs font-bold flex-shrink-0">
+                    {getInitials(m.username)}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-white truncate">@{m.username}</p>
+                  </div>
+                  <Badge variant="position" position={m.position}>{m.position}</Badge>
+                  <button
+                    onClick={() => setTestPartyLeaderId(m.userId)}
+                    className={`transition-colors flex-shrink-0 ${testPartyLeaderId === m.userId ? 'text-yellow-400' : 'text-muted hover:text-yellow-400'}`}
+                    title="Set as leader"
+                  >
+                    <Crown size={14} />
+                  </button>
+                  <button
+                    onClick={() => {
+                      setTestParty((prev) => {
+                        const next = prev.filter((x) => x.userId !== m.userId)
+                        if (m.userId === testPartyLeaderId) {
+                          setTestPartyLeaderId(next[0]?.userId ?? null)
+                        }
+                        return next
+                      })
+                    }}
+                    className="text-muted hover:text-red-400 transition-colors flex-shrink-0"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <Button
+                className="flex-1"
+                onClick={() => queueTestParty.mutate()}
+                loading={queueTestParty.isPending}
+              >
+                <Play size={14} /> Queue Test Party
+              </Button>
+              <Button variant="ghost" onClick={() => { setTestParty([]); setTestPartyLeaderId(null) }}>
+                Clear
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Search Users */}
+      <Card>
+        <CardHeader><CardTitle className="flex items-center gap-2"><Search size={16} /> Search Users</CardTitle></CardHeader>
+        <CardContent>
+          <div className="flex items-center gap-2 mb-3">
+            <Search size={16} className="text-muted flex-shrink-0" />
+            <Input
+              placeholder="Search by username or name..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+          </div>
+
+          {searchQuery.length > 0 && searchQuery.length < 2 && (
+            <p className="text-xs text-muted text-center py-2">Type at least 2 characters…</p>
+          )}
+
+          {searchQuery.length >= 2 && searchResults.length === 0 && (
+            <p className="text-xs text-muted text-center py-4">No users found.</p>
+          )}
+
+          <div className="flex flex-col gap-2">
+            {searchResults.map((u) => {
+              const pos = getPositionForUser(u)
+              const inQueue = queueEntries.some((e) => e.user_id === u.id)
+              const inParty = testParty.some((m) => m.userId === u.id)
+              return (
+                <div key={u.id} className="flex flex-col gap-2 py-2 border-b border-border last:border-0">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-full bg-surface-2 border border-border flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+                      {getInitials(u.full_name || u.username)}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-white truncate">{u.full_name || u.username}</p>
+                      <p className="text-xs text-muted">@{u.username} · {formatDate(u.created_at)}</p>
+                    </div>
+                    <select
+                      value={pos}
+                      onChange={(e) => setUserPositions((prev) => new Map(prev).set(u.id, e.target.value as Position))}
+                      className="bg-surface-2 border border-border text-white text-xs rounded-md px-2 py-1 cursor-pointer focus:outline-none focus:border-primary"
+                    >
+                      {POSITIONS.map((p) => (
+                        <option key={p} value={p}>{p}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex gap-2 pl-12">
+                    <Button
+                      size="sm"
+                      variant={inQueue ? 'ghost' : 'outline'}
+                      className="flex-1"
+                      loading={addUserToQueue.isPending}
+                      onClick={() => addUserToQueue.mutate({ userId: u.id, position: pos })}
+                    >
+                      {inQueue ? 'In Queue' : 'Add to Queue'}
+                    </Button>
+                    {!inQueue && (
+                      <Button
+                        size="sm"
+                        variant={inParty ? 'ghost' : 'outline'}
+                        className="flex-1"
+                        disabled={inParty || testParty.length >= 7}
+                        onClick={() => {
+                          const takenPositions = testParty.map((m) => m.position)
+                          const assignedPos = takenPositions.includes(pos)
+                            ? POSITIONS.find((p) => !takenPositions.includes(p)) ?? pos
+                            : pos
+                          if (testParty.length === 0) setTestPartyLeaderId(u.id)
+                          setTestParty((prev) => [...prev, { userId: u.id, username: u.username ?? u.full_name ?? '?', position: assignedPos }])
+                        }}
+                      >
+                        {inParty ? 'In Party' : 'Add to Party'}
                       </Button>
                     )}
                   </div>
