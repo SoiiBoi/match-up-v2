@@ -14,7 +14,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/components/ui/toast'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { getInitials, POSITIONS } from '@/lib/utils'
+import { getInitials, POSITIONS, POSITION_COLORS } from '@/lib/utils'
 import { FORMATIONS, getFormation } from '@/lib/formations'
 import type { Position, Formation, TeamMember, Profile } from '@/types'
 import { formatTime } from '@/lib/utils'
@@ -422,7 +422,9 @@ function GameScreen({ gameData }: { gameData: NonNullable<ReturnType<typeof useA
                   <span className="text-xs text-white flex-1 truncate">
                     {(m.profile as Profile | null)?.full_name || (m.profile as Profile | null)?.username}
                   </span>
-                  <span className="text-[10px] text-muted font-mono">{(m as TeamMember).assigned_position}</span>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded border font-mono font-semibold ${POSITION_COLORS[(m as TeamMember).assigned_position as Position]}`}>
+                    {(m as TeamMember).assigned_position}
+                  </span>
                 </div>
               ))}
             </div>
@@ -453,7 +455,7 @@ function GameScreen({ gameData }: { gameData: NonNullable<ReturnType<typeof useA
                 <span className="text-xs text-white flex-1 truncate">
                   {(m.profile as Profile | null)?.full_name || (m.profile as Profile | null)?.username}
                 </span>
-                <span className="text-[10px] bg-surface-2 border border-border px-1.5 py-0.5 rounded font-mono text-muted">
+                <span className={`text-[10px] px-1.5 py-0.5 rounded border font-mono font-semibold ${POSITION_COLORS[(m as TeamMember).assigned_position as Position]}`}>
                   {(m as TeamMember).assigned_position}
                 </span>
               </div>
