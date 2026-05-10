@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/services/supabase'
 import { useAuth } from '@/contexts/AuthContext'
-import type { Position, QueueEntry, Match } from '@/types'
+import type { Position, QueueEntry, Match, TeamMember, Profile, Game } from '@/types'
 
 export function useQueueStatus() {
   const { user } = useAuth()
@@ -92,6 +92,109 @@ export function useActiveMatch() {
         .in('status', ['scheduled', 'in_progress'])
         .maybeSingle()
       return match as Match | null
+    },
+    enabled: !!user,
+    refetchInterval: 5000,
+  })
+}
+
+export interface ActiveGameData {
+  phase: 'matched_waiting' | 'in_game'
+  game: Game | null
+  myTeam: { id: string; members: (TeamMember & { profile: Profile | null })[] }
+  allMatches: (Match & { opponent: { id: string; members: (TeamMember & { profile: Profile | null })[] } })[]
+}
+
+export function useActiveGame() {
+  const { user } = useAuth()
+  return useQuery({
+    queryKey: ['active-game', user?.id],
+    queryFn: async (): Promise<ActiveGameData | null> => {
+      if (!user) return null
+
+      // Find the user's current team membership
+      const { data: membership } = await supabase
+        .from('team_members')
+        .select('team_id')
+        .eq('user_id', user.id)
+        .maybeSingle()
+      if (!membership) return null
+
+      // Find the team — must be in 'ready' or 'in_game' status
+      const { data: team } = await supabase
+        .from('teams')
+        .select('id, game_id, status')
+        .eq('id', membership.team_id)
+        .in('status', ['ready', 'in_game'])
+        .maybeSingle()
+      if (!team) return null
+
+      // Fetch all members of my team with profiles
+      const { data: myMembers } = await supabase
+        .from('team_members')
+        .select('*')
+        .eq('team_id', team.id)
+      const memberIds = (myMembers ?? []).map((m) => m.user_id)
+      const { data: profiles } = memberIds.length
+        ? await supabase.from('profiles').select('*').in('id', memberIds)
+        : { data: [] }
+      const profileById = Object.fromEntries((profiles ?? []).map((p) => [p.id, p]))
+      const myTeamMembers = (myMembers ?? []).map((m) => ({ ...m, profile: profileById[m.user_id] ?? null }))
+
+      // If no game yet → matched but waiting for more teams
+      if (!team.game_id) {
+        return {
+          phase: 'matched_waiting',
+          game: null,
+          myTeam: { id: team.id, members: myTeamMembers as (TeamMember & { profile: Profile | null })[] },
+          allMatches: [],
+        }
+      }
+
+      // Fetch the game record
+      const { data: game } = await supabase
+        .from('games')
+        .select('*')
+        .eq('id', team.game_id)
+        .maybeSingle()
+      if (!game) return null
+
+      // Fetch all 6 matches in this game
+      const { data: matches } = await supabase
+        .from('matches')
+        .select('*')
+        .eq('game_id', team.game_id)
+        .order('scheduled_at', { ascending: true })
+
+      // For each match, load the opponent team's members
+      const allMatches = await Promise.all(
+        (matches ?? []).map(async (match) => {
+          const opponentTeamId = match.team_a_id === team.id ? match.team_b_id : match.team_a_id
+          const { data: oppMembers } = await supabase
+            .from('team_members')
+            .select('*')
+            .eq('team_id', opponentTeamId)
+          const oppIds = (oppMembers ?? []).map((m) => m.user_id)
+          const { data: oppProfiles } = oppIds.length
+            ? await supabase.from('profiles').select('*').in('id', oppIds)
+            : { data: [] }
+          const oppProfileById = Object.fromEntries((oppProfiles ?? []).map((p) => [p.id, p]))
+          return {
+            ...match,
+            opponent: {
+              id: opponentTeamId,
+              members: (oppMembers ?? []).map((m) => ({ ...m, profile: oppProfileById[m.user_id] ?? null })),
+            },
+          }
+        })
+      )
+
+      return {
+        phase: 'in_game',
+        game: game as Game,
+        myTeam: { id: team.id, members: myTeamMembers as (TeamMember & { profile: Profile | null })[] },
+        allMatches: allMatches as ActiveGameData['allMatches'],
+      }
     },
     enabled: !!user,
     refetchInterval: 5000,

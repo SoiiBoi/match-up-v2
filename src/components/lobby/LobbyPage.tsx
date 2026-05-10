@@ -8,14 +8,16 @@ import {
 import { useFriendsList, useSendFriendRequest } from '@/hooks/useFriends'
 import { useProfile } from '@/hooks/useProfile'
 import InlinePitch from './InlinePitch'
-import { useJoinQueue, useLeaveQueue, useQueueStatus, useJoinQueueAsParty } from '@/hooks/useMatchmaking'
+import { useJoinQueue, useLeaveQueue, useQueueStatus, useJoinQueueAsParty, useActiveGame } from '@/hooks/useMatchmaking'
+import { supabase } from '@/services/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/components/ui/toast'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { getInitials, POSITIONS } from '@/lib/utils'
 import { FORMATIONS, getFormation } from '@/lib/formations'
-import type { Position, Formation } from '@/types'
+import type { Position, Formation, TeamMember, Profile } from '@/types'
+import { formatTime } from '@/lib/utils'
 
 export default function LobbyPage() {
   const { user } = useAuth()
@@ -40,6 +42,7 @@ export default function LobbyPage() {
   const leaveQueue = useLeaveQueue()
   const joinQueueAsParty = useJoinQueueAsParty()
   const sendFriendRequest = useSendFriendRequest()
+  const { data: gameData } = useActiveGame()
 
   const [selectedPosition, setSelectedPosition] = useState<Position>('CM')
   const [positionSet, setPositionSet] = useState(false)
@@ -71,6 +74,15 @@ export default function LobbyPage() {
     return () => clearInterval(interval)
   }, [inQueue])
 
+  // Auto-trigger matchmaking engine every 15s while waiting in queue
+  useEffect(() => {
+    if (!inQueue) return
+    const trigger = () => supabase.functions.invoke('matchmaking-engine', { body: { action: 'process_queue' } })
+    trigger()
+    const id = setInterval(trigger, 15_000)
+    return () => clearInterval(id)
+  }, [inQueue])
+
   async function handleJoinSolo() {
     try {
       await joinQueue.mutateAsync({ position: selectedPosition, anyRole })
@@ -100,6 +112,10 @@ export default function LobbyPage() {
     } catch {
       toast('Failed to leave queue', 'error')
     }
+  }
+
+  if (gameData) {
+    return <GameScreen gameData={gameData} />
   }
 
   if (inQueue) {
@@ -373,6 +389,128 @@ export default function LobbyPage() {
             </Card>
           )}
         </>
+      )}
+    </div>
+  )
+}
+
+function GameScreen({ gameData }: { gameData: NonNullable<ReturnType<typeof useActiveGame>['data']> }) {
+  const { phase, game, myTeam, allMatches } = gameData
+
+  if (phase === 'matched_waiting') {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-6 animate-fade-in">
+        <div className="relative">
+          <div className="w-24 h-24 rounded-full border-4 border-emerald-500/30 flex items-center justify-center">
+            <div className="w-24 h-24 rounded-full border-4 border-t-emerald-500 border-transparent animate-spin absolute inset-0" />
+            <span className="text-4xl">✅</span>
+          </div>
+        </div>
+        <div className="text-center">
+          <h2 className="text-xl font-bold text-white">You're Matched!</h2>
+          <p className="text-sm text-muted mt-1">Your team is ready. Waiting for 3 more teams...</p>
+        </div>
+        <Card className="w-full max-w-xs">
+          <CardHeader><CardTitle className="text-sm flex items-center gap-2"><Users size={14} /> Your Team ({myTeam.members.length}/7)</CardTitle></CardHeader>
+          <CardContent>
+            <div className="flex flex-col gap-1.5">
+              {myTeam.members.map((m) => (
+                <div key={m.id} className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-full bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 text-[10px] font-bold flex-shrink-0">
+                    {getInitials((m.profile as Profile | null)?.full_name || (m.profile as Profile | null)?.username || '?')}
+                  </div>
+                  <span className="text-xs text-white flex-1 truncate">
+                    {(m.profile as Profile | null)?.full_name || (m.profile as Profile | null)?.username}
+                  </span>
+                  <span className="text-[10px] text-muted font-mono">{(m as TeamMember).assigned_position}</span>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+        <p className="text-xs text-muted text-center">Game will start once all 4 teams are ready</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-4 animate-fade-in">
+      <div className="pt-2">
+        <h1 className="text-xl font-bold text-white">⚽ You're in a Game!</h1>
+        <p className="text-sm text-muted">Round-robin format — 4 teams, 6 matches</p>
+      </div>
+
+      {/* My team */}
+      <Card className="border-emerald-500/30">
+        <CardHeader><CardTitle className="text-sm flex items-center gap-2 text-emerald-400"><Users size={14} /> Your Team ({myTeam.members.length}/7)</CardTitle></CardHeader>
+        <CardContent>
+          <div className="flex flex-col gap-1.5">
+            {myTeam.members.map((m) => (
+              <div key={m.id} className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-full bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 text-[10px] font-bold flex-shrink-0">
+                  {getInitials((m.profile as Profile | null)?.full_name || (m.profile as Profile | null)?.username || '?')}
+                </div>
+                <span className="text-xs text-white flex-1 truncate">
+                  {(m.profile as Profile | null)?.full_name || (m.profile as Profile | null)?.username}
+                </span>
+                <span className="text-[10px] bg-surface-2 border border-border px-1.5 py-0.5 rounded font-mono text-muted">
+                  {(m as TeamMember).assigned_position}
+                </span>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Match schedule */}
+      <Card>
+        <CardHeader><CardTitle className="text-sm">Match Schedule (6 matches)</CardTitle></CardHeader>
+        <CardContent>
+          <div className="flex flex-col gap-2">
+            {allMatches.map((match, idx) => {
+              const isMyMatch = match.team_a_id === myTeam.id || match.team_b_id === myTeam.id
+              const opp = match.opponent
+              const oppName = opp?.members[0]
+                ? `Team ${opp.id.slice(0, 6)}`
+                : 'Unknown'
+              return (
+                <div
+                  key={match.id}
+                  className={`flex items-center gap-3 p-2 rounded-lg border ${
+                    isMyMatch ? 'border-primary/40 bg-primary/5' : 'border-border bg-surface-2'
+                  }`}
+                >
+                  <span className="text-xs text-muted w-5 text-center">#{idx + 1}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium text-white truncate">
+                      {isMyMatch ? (
+                        <span className="text-primary">Your team</span>
+                      ) : (
+                        <span>Match {idx + 1}</span>
+                      )}
+                      {isMyMatch && <span className="text-muted"> vs {oppName}</span>}
+                    </p>
+                    <p className="text-[10px] text-muted">{match.venue}</p>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <p className="text-[10px] text-muted">{formatTime(match.scheduled_at)}</p>
+                    <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold ${
+                      match.status === 'scheduled' ? 'bg-blue-500/20 text-blue-300' :
+                      match.status === 'in_progress' ? 'bg-yellow-500/20 text-yellow-300' :
+                      'bg-surface-2 text-muted'
+                    }`}>
+                      {match.status}
+                    </span>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </CardContent>
+      </Card>
+
+      {game && (
+        <p className="text-[10px] text-muted text-center">Game ID: {game.id.slice(0, 8)}</p>
       )}
     </div>
   )

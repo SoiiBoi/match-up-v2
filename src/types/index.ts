@@ -139,6 +139,13 @@ export interface MatchResult {
   recorded_by: string
 }
 
+export interface Game {
+  id: string
+  status: 'forming' | 'active' | 'completed'
+  created_at: string
+  updated_at: string
+}
+
 export const POSITION_PRIORITY: Record<Position, Position[]> = {
   GK: ['GK'],
   LB: ['LB', 'CB', 'RB', 'LM'],
