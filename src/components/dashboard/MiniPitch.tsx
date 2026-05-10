@@ -1,22 +1,19 @@
 import { getInitials } from '@/lib/utils'
-import type { PartyMember, Position } from '@/types'
-
-const PITCH_POSITIONS: { position: Position; top: number; left: number }[] = [
-  { position: 'ST', top: 16, left: 50 },
-  { position: 'LW', top: 33, left: 16 },
-  { position: 'RW', top: 33, left: 84 },
-  { position: 'CM', top: 50, left: 50 },
-  { position: 'LB', top: 67, left: 25 },
-  { position: 'RB', top: 67, left: 75 },
-  { position: 'GK', top: 84, left: 50 },
-]
+import { getFormation } from '@/lib/formations'
+import type { PartyMember, Formation } from '@/types'
 
 interface Props {
   members: PartyMember[]
   currentUserId: string
+  formation?: Formation
 }
 
-export default function MiniPitch({ members, currentUserId }: Props) {
+export default function MiniPitch({ members, currentUserId, formation = 'balanced' }: Props) {
+  const formationDef = getFormation(formation)
+  const pitchPositions = formationDef.positions.map((pos) => ({
+    position: pos,
+    ...formationDef.coords[pos]!,
+  }))
   return (
     <div
       className="relative flex-shrink-0 rounded-xl overflow-hidden border border-white/20"
@@ -51,7 +48,7 @@ export default function MiniPitch({ members, currentUserId }: Props) {
         style={{ width: '38%', height: '7%' }} />
 
       {/* Position circles */}
-      {PITCH_POSITIONS.map(({ position, top, left }) => {
+      {pitchPositions.map(({ position, top, left }) => {
         const occupant = members.find((m) => m.preferred_position === position)
         const isMe = occupant?.user_id === currentUserId
 

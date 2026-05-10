@@ -1,4 +1,13 @@
-export type Position = 'GK' | 'ST' | 'LW' | 'RW' | 'CM' | 'LB' | 'RB'
+export type Position = 'GK' | 'LB' | 'CB' | 'RB' | 'LM' | 'CM' | 'RM' | 'LW' | 'RW' | 'ST'
+
+export type Formation =
+  | 'defensive'
+  | 'counter'
+  | 'balanced'
+  | 'most-balanced'
+  | 'attacking'
+  | 'mid-heavy'
+  | 'very-attacking'
 
 export interface Profile {
   id: string
@@ -46,6 +55,7 @@ export interface Party {
   id: string
   leader_id: string
   status: 'active' | 'in_queue' | 'disbanded'
+  formation: Formation
   created_at: string
   updated_at: string
 }
@@ -131,12 +141,24 @@ export interface MatchResult {
 
 export const POSITION_PRIORITY: Record<Position, Position[]> = {
   GK: ['GK'],
-  ST: ['ST', 'CM', 'RW', 'LW'],
-  LW: ['LW', 'ST', 'LB', 'CM'],
-  RW: ['RW', 'ST', 'RB', 'CM'],
-  CM: ['CM', 'ST', 'LW', 'RW', 'LB', 'RB'],
-  LB: ['LB', 'RB', 'CM'],
-  RB: ['RB', 'LB', 'CM'],
+  LB: ['LB', 'CB', 'RB', 'LM'],
+  CB: ['CB', 'LB', 'RB'],
+  RB: ['RB', 'CB', 'LB', 'RM'],
+  LM: ['LM', 'CM', 'RM', 'LB', 'LW'],
+  CM: ['CM', 'LM', 'RM', 'ST', 'LW', 'RW'],
+  RM: ['RM', 'CM', 'LM', 'RB', 'RW'],
+  LW: ['LW', 'ST', 'LM', 'CM'],
+  RW: ['RW', 'ST', 'RM', 'CM'],
+  ST: ['ST', 'LW', 'RW', 'CM'],
 }
 
-export const ALL_POSITIONS: Position[] = ['GK', 'ST', 'LW', 'RW', 'CM', 'LB', 'RB']
+export const ALL_POSITIONS: Position[] = ['GK', 'LB', 'CB', 'RB', 'LM', 'CM', 'RM', 'LW', 'RW', 'ST']
+
+export type PositionRole = 'goalkeeper' | 'defender' | 'midfielder' | 'attacker'
+
+export const POSITION_ROLE: Record<Position, PositionRole> = {
+  GK: 'goalkeeper',
+  LB: 'defender', CB: 'defender', RB: 'defender',
+  LM: 'midfielder', CM: 'midfielder', RM: 'midfielder',
+  LW: 'attacker', RW: 'attacker', ST: 'attacker',
+}

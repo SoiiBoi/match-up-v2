@@ -3,19 +3,19 @@ import { useSearchParams } from 'react-router-dom'
 import { Users, UserPlus, CheckCircle, Circle, LogOut, Zap, Clock } from 'lucide-react'
 import {
   useCurrentParty, usePartyMembers, useCreateParty,
-  useLeaveParty, useToggleReady, useInviteFriend, useFriendsForInvite, useSelectPosition,
+  useLeaveParty, useToggleReady, useInviteFriend, useFriendsForInvite, useSelectPosition, useUpdateFormation,
 } from '@/hooks/useLobby'
 import { useFriendsList, useSendFriendRequest } from '@/hooks/useFriends'
 import { useProfile } from '@/hooks/useProfile'
-import PositionPitchOverlay from './PositionPitchOverlay'
+import InlinePitch from './InlinePitch'
 import { useJoinQueue, useLeaveQueue, useQueueStatus, useJoinQueueAsParty } from '@/hooks/useMatchmaking'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/components/ui/toast'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { getInitials, POSITIONS } from '@/lib/utils'
-import type { Position } from '@/types'
+import { FORMATIONS, getFormation } from '@/lib/formations'
+import type { Position, Formation } from '@/types'
 
 export default function LobbyPage() {
   const { user } = useAuth()
@@ -35,6 +35,7 @@ export default function LobbyPage() {
   const toggleReady = useToggleReady()
   const inviteFriend = useInviteFriend()
   const selectPosition = useSelectPosition()
+  const updateFormation = useUpdateFormation()
   const joinQueue = useJoinQueue()
   const leaveQueue = useLeaveQueue()
   const joinQueueAsParty = useJoinQueueAsParty()
@@ -44,7 +45,7 @@ export default function LobbyPage() {
   const [positionSet, setPositionSet] = useState(false)
   const [anyRole, setAnyRole] = useState(false)
   const [tick, setTick] = useState(0)
-  const [showPitchPicker, setShowPitchPicker] = useState(false)
+  const [showTeammates, setShowTeammates] = useState(false)
   const [invitedIds, setInvitedIds] = useState<Set<string>>(new Set())
   const [addedIds, setAddedIds] = useState<Set<string>>(new Set())
 
@@ -189,73 +190,128 @@ export default function LobbyPage() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="flex flex-col gap-2">
+              {/* Interactive pitch */}
+              {user && (
+                <InlinePitch
+                  members={members}
+                  currentUserId={user.id}
+                  formation={(party.formation ?? 'balanced') as Formation}
+                  selecting={selectPosition.isPending}
+                  onSelect={(pos) => selectPosition.mutate({ partyId: party.id, position: pos })}
+                />
+              )}
+
+              {/* Toggle teammates */}
+              <button
+                onClick={() => setShowTeammates((v) => !v)}
+                className="mt-3 w-full flex items-center justify-between border-t border-border pt-2 text-xs text-muted hover:text-white transition-colors"
+              >
+                <span>Teammates ({members.length}/7)</span>
+                <span>{showTeammates ? '▲ Hide' : '▼ Show'}</span>
+              </button>
+
+              {/* Slim member list */}
+              {showTeammates && (
+              <div className="flex flex-col gap-1.5 mt-2">
                 {members.map((m) => {
                   const isMe = m.user_id === user?.id
                   const isFriend = friendsList.some((f) => f.friend_id === m.user_id)
                   const alreadyAdded = addedIds.has(m.user_id)
                   return (
-                    <div key={m.id} className="flex items-center gap-3 py-1">
-                      <div className="w-9 h-9 rounded-full bg-primary/20 border border-primary/30 flex items-center justify-center text-primary text-xs font-bold flex-shrink-0">
+                    <div key={m.id} className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-full bg-primary/20 border border-primary/30 flex items-center justify-center text-primary text-[10px] font-bold flex-shrink-0">
                         {getInitials(m.profile?.full_name || m.profile?.username || 'P')}
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-white truncate">{m.profile?.full_name || m.profile?.username}</p>
-                        {party.leader_id === m.user_id && <span className="text-xs text-primary">Leader</span>}
-                      </div>
+                      <span className="text-xs text-white flex-1 truncate min-w-0">
+                        {m.profile?.full_name || m.profile?.username}
+                        {party.leader_id === m.user_id && <span className="text-primary ml-1">★</span>}
+                      </span>
                       {!isMe && !isFriend && (
                         <button
                           disabled={alreadyAdded || sendFriendRequest.isPending}
                           onClick={() => sendFriendRequest.mutate(m.user_id, {
                             onSuccess: () => setAddedIds((prev) => new Set(prev).add(m.user_id)),
                           })}
-                          className={`text-xs px-2 py-0.5 rounded border transition-colors flex-shrink-0 ${
+                          className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors flex-shrink-0 ${
                             alreadyAdded
                               ? 'border-primary/30 text-primary cursor-default'
                               : 'border-border text-muted hover:border-primary hover:text-primary'
                           }`}
                         >
-                          {alreadyAdded ? '✓' : '+ Add'}
+                          {alreadyAdded ? '✓' : '+Add'}
                         </button>
                       )}
-                      {m.preferred_position && (
-                        <Badge variant="position" position={m.preferred_position as Position}>{m.preferred_position}</Badge>
-                      )}
                       {m.status === 'ready'
-                        ? <CheckCircle size={16} className="text-primary flex-shrink-0" />
-                        : <Circle size={16} className="text-muted flex-shrink-0" />
+                        ? <CheckCircle size={13} className="text-primary flex-shrink-0" />
+                        : <Circle size={13} className="text-muted flex-shrink-0" />
                       }
                     </div>
                   )
                 })}
                 {Array.from({ length: 7 - members.length }).map((_, i) => (
-                  <div key={i} className="flex items-center gap-3 py-1 opacity-30">
-                    <div className="w-9 h-9 rounded-full border border-dashed border-border flex items-center justify-center">
-                      <UserPlus size={14} className="text-muted" />
+                  <div key={i} className="flex items-center gap-2 opacity-30">
+                    <div className="w-7 h-7 rounded-full border border-dashed border-border flex items-center justify-center">
+                      <UserPlus size={12} className="text-muted" />
                     </div>
-                    <span className="text-sm text-muted">Open slot</span>
+                    <span className="text-xs text-muted">Open slot</span>
                   </div>
                 ))}
               </div>
-
-              {/* My position picker */}
-              {myMember && (
-                <button
-                  onClick={() => setShowPitchPicker(true)}
-                  className="mt-3 pt-3 border-t border-border w-full flex items-center justify-between hover:opacity-80 transition-opacity"
-                >
-                  <span className="text-sm text-muted">My Position</span>
-                  {myMember.preferred_position ? (
-                    <Badge variant="position" position={myMember.preferred_position as Position}>
-                      {myMember.preferred_position}
-                    </Badge>
-                  ) : (
-                    <span className="text-sm text-yellow-400 font-medium">Tap to pick →</span>
-                  )}
-                </button>
               )}
+
+              {/* My position label */}
+              <div className="mt-2 flex items-center justify-between">
+                <span className="text-xs text-muted">My Position</span>
+                <span className={`text-xs font-semibold ${myMember?.preferred_position ? 'text-white' : 'text-yellow-400'}`}>
+                  {myMember?.preferred_position ?? 'Tap pitch to pick'}
+                </span>
+              </div>
             </CardContent>
           </Card>
+
+          {/* Formation selector */}
+          {(() => {
+            const currentFormation = (party.formation ?? 'balanced') as Formation
+            const formationDef = getFormation(currentFormation)
+            return (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-sm">
+                    🗺️ Formation
+                    <span className="text-xs font-normal text-muted ml-1">
+                      {formationDef.label} · {formationDef.style}
+                    </span>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {isLeader ? (
+                    <div className="flex flex-wrap gap-2">
+                      {FORMATIONS.map((f) => (
+                        <button
+                          key={f.id}
+                          disabled={updateFormation.isPending}
+                          onClick={() => updateFormation.mutate({ partyId: party.id, formation: f.id, newPositions: f.positions })}
+                          className={`flex flex-col items-center px-2.5 py-1.5 rounded-lg border text-xs transition-all ${
+                            currentFormation === f.id
+                              ? 'bg-primary/20 border-primary/60 text-primary font-semibold'
+                              : 'bg-surface-2 border-border text-muted hover:text-white hover:border-white/30'
+                          }`}
+                        >
+                          <span className="font-mono font-bold">{f.shape}</span>
+                          <span className="text-[10px] opacity-70 mt-0.5">{f.style}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted">
+                      <span className="text-white font-semibold">{formationDef.shape}</span> — {formationDef.style}
+                      <span className="text-xs ml-2 opacity-50">(only leader can change)</span>
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+            )
+          })()}
 
           {/* Ready / Start */}
           {isLeader ? (
@@ -278,21 +334,6 @@ export default function LobbyPage() {
             >
               {myMember?.status === 'ready' ? '✓ Ready (click to unready)' : 'Mark as Ready'}
             </Button>
-          )}
-
-          {/* Position pitch overlay */}
-          {showPitchPicker && party && user && (
-            <PositionPitchOverlay
-              members={members}
-              currentUserId={user.id}
-              partyId={party.id}
-              selecting={selectPosition.isPending}
-              onSelect={async (pos) => {
-                await selectPosition.mutateAsync({ partyId: party.id, position: pos })
-                setShowPitchPicker(false)
-              }}
-              onClose={() => setShowPitchPicker(false)}
-            />
           )}
 
           {/* Invite friends */}

@@ -1,35 +1,35 @@
 import { X } from 'lucide-react'
 import { getInitials } from '@/lib/utils'
-import type { PartyMember, Position } from '@/types'
-
-const PITCH_POSITIONS: { position: Position; top: number; left: number }[] = [
-  { position: 'ST', top: 16, left: 50 },
-  { position: 'LW', top: 33, left: 16 },
-  { position: 'RW', top: 33, left: 84 },
-  { position: 'CM', top: 50, left: 50 },
-  { position: 'LB', top: 67, left: 25 },
-  { position: 'RB', top: 67, left: 75 },
-  { position: 'GK', top: 84, left: 50 },
-]
+import { getFormation } from '@/lib/formations'
+import type { PartyMember, Position, Formation } from '@/types'
 
 interface Props {
   members: PartyMember[]
   currentUserId: string
   partyId: string
+  formation: Formation
   onSelect: (pos: Position | null) => void
   onClose: () => void
   selecting: boolean
 }
 
-export default function PositionPitchOverlay({ members, currentUserId, onSelect, onClose, selecting }: Props) {
+export default function PositionPitchOverlay({ members, currentUserId, formation, onSelect, onClose, selecting }: Props) {
   const myMember = members.find((m) => m.user_id === currentUserId)
   const myPosition = myMember?.preferred_position ?? null
+  const formationDef = getFormation(formation)
+  const pitchPositions = formationDef.positions.map((pos) => ({
+    position: pos,
+    ...formationDef.coords[pos]!,
+  }))
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-black/95">
       {/* Header */}
       <div className="flex items-center justify-between px-4 pt-safe py-3 border-b border-white/10 flex-shrink-0">
-        <h2 className="text-white font-bold text-lg">Choose Position</h2>
+        <div>
+          <h2 className="text-white font-bold text-lg">Choose Position</h2>
+          <p className="text-xs text-muted">{formationDef.label} · {formationDef.style}</p>
+        </div>
         <button onClick={onClose} className="text-muted hover:text-white transition-colors p-2 -mr-2">
           <X size={22} />
         </button>
@@ -77,7 +77,7 @@ export default function PositionPitchOverlay({ members, currentUserId, onSelect,
           ))}
 
           {/* Position circles */}
-          {PITCH_POSITIONS.map(({ position, top, left }) => {
+          {pitchPositions.map(({ position, top, left }) => {
             const occupant = members.find((m) => m.preferred_position === position)
             const isMe = occupant?.user_id === currentUserId
             const isLocked = !!occupant && !isMe

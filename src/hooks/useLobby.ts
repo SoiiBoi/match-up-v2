@@ -2,9 +2,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/services/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/components/ui/toast'
-import type { Party, PartyMember, Friendship, Position } from '@/types'
+import type { Party, PartyMember, Friendship, Position, Formation } from '@/types'
+import { POSITION_PRIORITY } from '@/types'
 
-const ALL_POSITIONS: Position[] = ['GK', 'ST', 'LW', 'RW', 'CM', 'LB', 'RB']
+const ALL_POSITIONS: Position[] = ['GK', 'LB', 'CB', 'RB', 'LM', 'CM', 'RM', 'LW', 'RW', 'ST']
 
 function pickPosition(profilePos: Position | null, taken: (Position | null)[]): Position | null {
   if (profilePos && !taken.includes(profilePos)) return profilePos
@@ -19,7 +20,7 @@ export function useCurrentParty() {
       if (!user) return null
       const { data } = await supabase
         .from('party_members')
-        .select('party_id, party:parties!inner(id, leader_id, status, created_at, updated_at)')
+        .select('party_id, party:parties!inner(id, leader_id, status, formation, created_at, updated_at)')
         .eq('user_id', user.id)
         .eq('party.status', 'active')
         .limit(1)
@@ -147,6 +148,59 @@ export function useSelectPosition() {
       if (error) throw error
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['lobby', 'members'] }),
+  })
+}
+
+export function useUpdateFormation() {
+  const { user } = useAuth()
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ partyId, formation, newPositions }: { partyId: string; formation: Formation; newPositions: Position[] }) => {
+      if (!user) throw new Error('Not authenticated')
+      const { error: fe } = await supabase
+        .from('parties')
+        .update({ formation })
+        .eq('id', partyId)
+        .eq('leader_id', user.id)
+      if (fe) throw fe
+
+      // Reassign members whose positions don't exist in the new formation
+      const { data: currentMembers } = await supabase
+        .from('party_members')
+        .select('user_id, preferred_position')
+        .eq('party_id', partyId)
+
+      if (currentMembers) {
+        const takenPositions = new Set<Position>()
+        const toReassign: { user_id: string; preferred_position: Position }[] = []
+
+        for (const m of currentMembers) {
+          if (!m.preferred_position) continue
+          const pos = m.preferred_position as Position
+          if (newPositions.includes(pos)) {
+            takenPositions.add(pos)
+          } else {
+            toReassign.push({ user_id: m.user_id, preferred_position: pos })
+          }
+        }
+
+        const assignments = toReassign.map((m) => {
+          const priority = POSITION_PRIORITY[m.preferred_position]
+          const best = priority.find((p) => newPositions.includes(p) && !takenPositions.has(p)) ?? null
+          if (best) takenPositions.add(best)
+          return { user_id: m.user_id, position: best }
+        })
+
+        if (assignments.length > 0) {
+          const { error: re } = await supabase.rpc('reassign_party_positions', {
+            party_uuid: partyId,
+            assignments,
+          })
+          if (re) throw re
+        }
+      }
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['lobby'] }),
   })
 }
 
