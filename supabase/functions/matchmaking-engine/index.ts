@@ -262,18 +262,21 @@ Deno.serve(async (req) => {
         // Create the game record
         const { data: game, error: ge } = await supabase
           .from('games')
-          .insert({ status: 'active' })
+          .insert({ status: 'active', venue: 'Football Arena Bangkok' })
           .select()
           .single()
         if (ge) throw ge
 
-        // Generate all 6 pairs from 4 teams: C(4,2)
-        const pairs: [string, string][] = []
-        for (let i = 0; i < gameFour.length; i++) {
-          for (let j = i + 1; j < gameFour.length; j++) {
-            pairs.push([gameFour[i], gameFour[j]])
-          }
-        }
+        // Round-robin schedule: 3 rounds × 2 simultaneous matches, no team plays twice per round
+        // Round 1: A vs B, C vs D
+        // Round 2: A vs C, B vs D
+        // Round 3: A vs D, B vs C
+        const [A, B, C, D] = gameFour
+        const pairs: [string, string][] = [
+          [A, B], [C, D],
+          [A, C], [B, D],
+          [A, D], [B, C],
+        ]
 
         // Schedule matches 30 minutes apart starting in 2 hours
         const now = Date.now()
@@ -285,7 +288,6 @@ Deno.serve(async (req) => {
           team_b_id: teamB,
           game_id: game.id,
           status: 'scheduled',
-          venue: 'Football Arena Bangkok',
           scheduled_at: new Date(now + twoHours + idx * thirtyMin).toISOString(),
         }))
 

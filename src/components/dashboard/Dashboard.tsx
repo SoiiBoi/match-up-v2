@@ -2,14 +2,15 @@ import { useNavigate } from 'react-router-dom'
 import { Users, Zap, Trophy, Target, TrendingUp, Star, LogOut, Clock, CheckCircle2 } from 'lucide-react'
 import { useProfile, useIsAdmin } from '@/hooks/useProfile'
 import { useCurrentParty, usePartyMembers } from '@/hooks/useLobby'
-import { useQueueStatus, useActiveMatch } from '@/hooks/useMatchmaking'
+import { useQueueStatus, useActiveMatch, useActiveGame } from '@/hooks/useMatchmaking'
+import type { ActiveGameData } from '@/hooks/useMatchmaking'
 import { useAuth } from '@/contexts/AuthContext'
-import { Card, CardContent } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { getInitials, formatDate } from '@/lib/utils'
+import { getInitials, formatDate, formatTime, TEAM_NAMES, TEAM_COLORS, POSITION_COLORS } from '@/lib/utils'
 import MiniPitch from './MiniPitch'
-import type { Match, Position } from '@/types'
+import type { Match, Position, TeamMember, PartyMember } from '@/types'
 
 export default function Dashboard() {
   const { user, signOut } = useAuth()
@@ -19,6 +20,7 @@ export default function Dashboard() {
   const { data: members = [] } = usePartyMembers(party?.id)
   const { data: queueEntry } = useQueueStatus()
   const { data: activeMatch } = useActiveMatch()
+  const { data: activeGame } = useActiveGame()
   const myMember = members.find((m) => m.user_id === user?.id)
   const navigate = useNavigate()
 
@@ -104,8 +106,12 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Match Found card — highest priority */}
-      {activeMatch ? (
+      {/* In-Game card — highest priority */}
+      {activeGame?.phase === 'in_game' ? (
+        <InGameDashboardCard gameData={activeGame} userId={user?.id ?? ''} />
+      ) : activeGame?.phase === 'matched_waiting' ? (
+        <MatchedWaitingDashboardCard gameData={activeGame} userId={user?.id ?? ''} />
+      ) : activeMatch ? (
         <MatchFoundCard match={activeMatch} userId={user?.id ?? ''} onView={() => navigate('/matches')} />
       ) : queueEntry ? (
         /* Searching card */
@@ -153,7 +159,7 @@ export default function Dashboard() {
                   </p>
                 ))}
               </div>
-              {user && <MiniPitch members={members} currentUserId={user.id} />}
+              {user && <MiniPitch members={members} currentUserId={user.id} formation={party.formation} />}
             </div>
           </CardContent>
         </Card>
@@ -211,8 +217,8 @@ function MatchFoundCard({ match, userId, onView }: { match: Match; userId: strin
           )}
         </div>
 
-        {match.venue && (
-          <p className="text-xs text-muted mb-3">📍 {match.venue}</p>
+        {match.game?.venue && (
+          <p className="text-xs text-muted mb-3">📍 {match.game.venue}</p>
         )}
 
         <div className="flex items-center gap-2">
@@ -249,5 +255,181 @@ function MatchFoundCard({ match, userId, onView }: { match: Match; userId: strin
         <p className="text-xs text-muted text-center mt-3">Tap to view match details →</p>
       </CardContent>
     </Card>
+  )
+}
+
+function InGameDashboardCard({ gameData, userId }: { gameData: ActiveGameData; userId: string }) {
+  const navigate = useNavigate()
+  const { game, myTeam, allMatches } = gameData
+
+  const teamOrder: string[] = []
+  const seen = new Set<string>()
+  for (const m of allMatches) {
+    if (!seen.has(m.team_a_id)) { teamOrder.push(m.team_a_id); seen.add(m.team_a_id) }
+    if (!seen.has(m.team_b_id)) { teamOrder.push(m.team_b_id); seen.add(m.team_b_id) }
+    if (teamOrder.length === 4) break
+  }
+  const myTeamIdx = teamOrder.indexOf(myTeam.id)
+  const myColor = TEAM_COLORS[myTeamIdx] ?? TEAM_COLORS[0]
+  const myName = TEAM_NAMES[myTeamIdx] ?? 'Your Team'
+
+  const POSITION_ORDER: Partial<Record<Position, number>> = {
+    GK: 0, LB: 1, CB: 2, RB: 3, LM: 4, CM: 5, RM: 6, LW: 7, ST: 8, RW: 9,
+  }
+  const sortedMembers = [...myTeam.members].sort((a, b) =>
+    (POSITION_ORDER[(a as TeamMember).assigned_position as Position] ?? 99) -
+    (POSITION_ORDER[(b as TeamMember).assigned_position as Position] ?? 99)
+  )
+  const pitchMembers = myTeam.members.map((m) => ({
+    ...m,
+    preferred_position: (m as TeamMember).assigned_position,
+  })) as unknown as PartyMember[]
+  const assignedPositions = sortedMembers.map((m) => (m as TeamMember).assigned_position as Position)
+
+  const nextMatch = allMatches.find(
+    (m) => (m.team_a_id === myTeam.id || m.team_b_id === myTeam.id) && m.status === 'scheduled'
+  )
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="font-bold text-white text-base">⚽ You're in a Game!</p>
+          <p className="text-xs text-muted">Round-robin format — 4 teams, 6 matches</p>
+        </div>
+        <div className="text-right flex-shrink-0">
+          <p className="text-sm font-semibold text-white">
+            Game Start at {allMatches[0]?.scheduled_at ? formatTime(allMatches[0].scheduled_at) : '—'}
+          </p>
+          <p className="text-xs text-muted">{game?.venue ?? ''}</p>
+        </div>
+      </div>
+
+      <Card className={myColor.border}>
+        <CardHeader>
+          <CardTitle className={`text-sm flex items-center gap-2 ${myColor.text}`}>
+            <Users size={14} /> {myName} ({myTeam.members.length}/7)
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex gap-3">
+            <div className="flex flex-col gap-1.5 flex-1 min-w-0">
+              {sortedMembers.map((m) => {
+                const isMe = m.user_id === userId
+                const profile = (m as TeamMember).profile ?? null
+                const displayName = profile?.full_name && profile.full_name.length <= 14
+                  ? profile.full_name
+                  : `@${profile?.username ?? '?'}`
+                return (
+                  <button
+                    key={m.user_id}
+                    className="flex items-center gap-1.5 w-full text-left hover:bg-white/5 rounded-lg px-1 py-0.5 transition-colors"
+                    onClick={() => !isMe && navigate(`/profile/${m.user_id}`)}
+                    disabled={isMe}
+                  >
+                    <div className={`w-7 h-7 rounded-full ${myColor.bg} border ${myColor.border} flex items-center justify-center ${myColor.text} text-[10px] font-bold flex-shrink-0`}>
+                      {getInitials(profile?.full_name || profile?.username || '?')}
+                    </div>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded border font-mono font-semibold flex-shrink-0 ${POSITION_COLORS[(m as TeamMember).assigned_position as Position]}`}>
+                      {(m as TeamMember).assigned_position}
+                    </span>
+                    <span className="text-xs text-white flex-1 truncate">
+                      {displayName}
+                      {isMe && <span className={`${myColor.text} ml-1`}>(You)</span>}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+            <MiniPitch members={pitchMembers} currentUserId={userId} customPositions={assignedPositions} />
+          </div>
+        </CardContent>
+      </Card>
+
+      {nextMatch && (() => {
+        const ai = teamOrder.indexOf(nextMatch.team_a_id)
+        const bi = teamOrder.indexOf(nextMatch.team_b_id)
+        const aName = TEAM_NAMES[ai] ?? `Team ${ai + 1}`
+        const bName = TEAM_NAMES[bi] ?? `Team ${bi + 1}`
+        const aColor = TEAM_COLORS[ai] ?? TEAM_COLORS[0]
+        const bColor = TEAM_COLORS[bi] ?? TEAM_COLORS[0]
+        const matchIdx = allMatches.indexOf(nextMatch)
+        return (
+          <Card key={nextMatch.id}>
+            <CardContent className="pt-3 pb-3">
+              <p className="text-xs text-muted mb-2 font-semibold">Next match</p>
+              <div className="flex items-center gap-2 p-2 rounded-lg border border-primary/40 bg-primary/5">
+                <span className="text-xs text-muted w-5 text-center flex-shrink-0">#{matchIdx + 1}</span>
+                <div className="flex-1 text-center text-xs font-medium">
+                  <span className={aColor.text}>{aName}</span>
+                  <span className="text-muted"> vs </span>
+                  <span className={bColor.text}>{bName}</span>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <p className="text-[10px] text-muted">{formatTime(nextMatch.scheduled_at)}</p>
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 font-semibold">scheduled</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )
+      })()}
+
+      <button
+        className="text-xs text-muted text-center hover:text-white transition-colors"
+        onClick={() => navigate('/lobby')}
+      >
+        View full schedule →
+      </button>
+    </div>
+  )
+}
+
+function MatchedWaitingDashboardCard({ gameData, userId }: { gameData: ActiveGameData; userId: string }) {
+  const { myTeam } = gameData
+  const POSITION_ORDER: Partial<Record<Position, number>> = {
+    GK: 0, LB: 1, CB: 2, RB: 3, LM: 4, CM: 5, RM: 6, LW: 7, ST: 8, RW: 9,
+  }
+  const sortedMembers = [...myTeam.members].sort((a, b) =>
+    (POSITION_ORDER[(a as TeamMember).assigned_position as Position] ?? 99) -
+    (POSITION_ORDER[(b as TeamMember).assigned_position as Position] ?? 99)
+  )
+  return (
+    <div className="flex flex-col items-center gap-4">
+      <div className="text-center">
+        <h2 className="text-xl font-bold text-white">You're Matched!</h2>
+        <p className="text-sm text-muted mt-1">Your team is ready. Waiting for 3 more teams...</p>
+      </div>
+      <Card className="w-full">
+        <CardHeader>
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Users size={14} /> Your Team ({myTeam.members.length}/7)
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-col gap-1.5">
+            {sortedMembers.map((m) => {
+              const isMe = m.user_id === userId
+              const profile = (m as TeamMember).profile ?? null
+              return (
+                <div key={m.user_id} className="flex items-center gap-2 px-1 py-0.5">
+                  <div className="w-7 h-7 rounded-full bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 text-[10px] font-bold flex-shrink-0">
+                    {getInitials(profile?.full_name || profile?.username || '?')}
+                  </div>
+                  <span className="text-xs text-white flex-1 truncate">
+                    {profile?.full_name || profile?.username}
+                    {isMe && <span className="text-emerald-400 ml-1">(You)</span>}
+                  </span>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded border font-mono font-semibold flex-shrink-0 ${POSITION_COLORS[(m as TeamMember).assigned_position as Position]}`}>
+                    {(m as TeamMember).assigned_position}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        </CardContent>
+      </Card>
+      <p className="text-xs text-muted text-center">Game will start once all 4 teams are ready</p>
+    </div>
   )
 }

@@ -23,6 +23,7 @@ export function useMatchHistory() {
         .from('matches')
         .select(`
           *,
+          game:games!matches_game_id_fkey(venue),
           team_a:teams!matches_team_a_id_fkey(
             id, status,
             members:team_members(*, profile:profiles(*))

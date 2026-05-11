@@ -126,6 +126,19 @@ export const FORMATIONS: FormationDef[] = [
   },
 ]
 
+export const POSITION_COORDS: Record<import('@/types').Position, { top: number; left: number }> = {
+  GK: { top: 84, left: 50 },
+  LB: { top: 67, left: 20 },
+  CB: { top: 67, left: 50 },
+  RB: { top: 67, left: 80 },
+  LM: { top: 50, left: 20 },
+  CM: { top: 50, left: 50 },
+  RM: { top: 50, left: 80 },
+  LW: { top: 25, left: 20 },
+  ST: { top: 16, left: 50 },
+  RW: { top: 25, left: 80 },
+}
+
 export const FORMATION_MAP = Object.fromEntries(
   FORMATIONS.map((f) => [f.id, f])
 ) as Record<Formation, FormationDef>

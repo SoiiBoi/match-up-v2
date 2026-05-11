@@ -116,11 +116,12 @@ export interface Match {
   id: string
   team_a_id: string
   team_b_id: string
+  game_id: string | null
   status: 'scheduled' | 'in_progress' | 'completed' | 'cancelled'
-  venue: string
   scheduled_at: string
   created_at: string
   updated_at: string
+  game?: { venue: string }
   team_a?: TeamWithMembers
   team_b?: TeamWithMembers
   result?: MatchResult
@@ -142,6 +143,7 @@ export interface MatchResult {
 export interface Game {
   id: string
   status: 'forming' | 'active' | 'completed'
+  venue: string
   created_at: string
   updated_at: string
 }

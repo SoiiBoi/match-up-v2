@@ -1,19 +1,20 @@
-import { getInitials } from '@/lib/utils'
-import { getFormation } from '@/lib/formations'
-import type { PartyMember, Formation } from '@/types'
+import { getInitials, ROLE_COLORS } from '@/lib/utils'
+import { getFormation, POSITION_COORDS } from '@/lib/formations'
+import type { PartyMember, Formation, Position } from '@/types'
+import { POSITION_ROLE } from '@/types'
 
 interface Props {
   members: PartyMember[]
   currentUserId: string
   formation?: Formation
+  customPositions?: Position[]
 }
 
-export default function MiniPitch({ members, currentUserId, formation = 'balanced' }: Props) {
+export default function MiniPitch({ members, currentUserId, formation = 'balanced', customPositions }: Props) {
   const formationDef = getFormation(formation)
-  const pitchPositions = formationDef.positions.map((pos) => ({
-    position: pos,
-    ...formationDef.coords[pos]!,
-  }))
+  const pitchPositions = customPositions
+    ? customPositions.map((pos) => ({ position: pos, ...POSITION_COORDS[pos] }))
+    : formationDef.positions.map((pos) => ({ position: pos, ...formationDef.coords[pos]! }))
   return (
     <div
       className="relative flex-shrink-0 rounded-xl overflow-hidden border border-white/20"
@@ -51,6 +52,7 @@ export default function MiniPitch({ members, currentUserId, formation = 'balance
       {pitchPositions.map(({ position, top, left }) => {
         const occupant = members.find((m) => m.preferred_position === position)
         const isMe = occupant?.user_id === currentUserId
+        const rc = ROLE_COLORS[POSITION_ROLE[position]]
 
         return (
           <div
@@ -60,9 +62,9 @@ export default function MiniPitch({ members, currentUserId, formation = 'balance
           >
             <div className={`w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold border ${
               isMe
-                ? 'bg-green-400 border-white text-white'
+                ? `${rc.bright} shadow-md`
                 : occupant
-                ? 'bg-gray-500 border-gray-300 text-white'
+                ? rc.dark
                 : 'bg-green-900/60 border-white/30 text-white/50'
             }`}>
               {occupant
@@ -70,7 +72,7 @@ export default function MiniPitch({ members, currentUserId, formation = 'balance
                 : position}
             </div>
             {occupant && (
-              <span className="text-[8px] text-white/70 font-medium">{position}</span>
+              <span className={`text-[8px] font-medium ${isMe ? rc.label : `${rc.label} opacity-70`}`}>{position}</span>
             )}
           </div>
         )

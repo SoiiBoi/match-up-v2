@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams, useNavigate } from 'react-router-dom'
 import { Users, UserPlus, CheckCircle, Circle, LogOut, Zap, Clock } from 'lucide-react'
 import {
   useCurrentParty, usePartyMembers, useCreateParty,
@@ -8,15 +8,16 @@ import {
 import { useFriendsList, useSendFriendRequest } from '@/hooks/useFriends'
 import { useProfile } from '@/hooks/useProfile'
 import InlinePitch from './InlinePitch'
+import MiniPitch from '@/components/dashboard/MiniPitch'
 import { useJoinQueue, useLeaveQueue, useQueueStatus, useJoinQueueAsParty, useActiveGame } from '@/hooks/useMatchmaking'
 import { supabase } from '@/services/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/components/ui/toast'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { getInitials, POSITIONS, POSITION_COLORS } from '@/lib/utils'
+import { getInitials, POSITIONS, POSITION_COLORS, TEAM_NAMES, TEAM_COLORS } from '@/lib/utils'
 import { FORMATIONS, getFormation } from '@/lib/formations'
-import type { Position, Formation, TeamMember, Profile } from '@/types'
+import type { Position, Formation, TeamMember, Profile, PartyMember } from '@/types'
 import { formatTime } from '@/lib/utils'
 
 export default function LobbyPage() {
@@ -115,7 +116,7 @@ export default function LobbyPage() {
   }
 
   if (gameData) {
-    return <GameScreen gameData={gameData} />
+    return <GameScreen gameData={gameData} currentUserId={user?.id ?? ''} />
   }
 
   if (inQueue) {
@@ -394,8 +395,37 @@ export default function LobbyPage() {
   )
 }
 
-function GameScreen({ gameData }: { gameData: NonNullable<ReturnType<typeof useActiveGame>['data']> }) {
+function GameScreen({ gameData, currentUserId }: { gameData: NonNullable<ReturnType<typeof useActiveGame>['data']>; currentUserId: string }) {
   const { phase, game, myTeam, allMatches } = gameData
+  const navigate = useNavigate()
+  const [showAllMatches, setShowAllMatches] = useState(false)
+
+  // Derive team colour order from match schedule (first 4 unique IDs encountered)
+  const teamOrder: string[] = []
+  const _seenTeams = new Set<string>()
+  for (const m of allMatches) {
+    if (!_seenTeams.has(m.team_a_id)) { teamOrder.push(m.team_a_id); _seenTeams.add(m.team_a_id) }
+    if (!_seenTeams.has(m.team_b_id)) { teamOrder.push(m.team_b_id); _seenTeams.add(m.team_b_id) }
+    if (teamOrder.length === 4) break
+  }
+  const myTeamIdx = teamOrder.indexOf(myTeam.id)
+  const myColor = TEAM_COLORS[myTeamIdx] ?? TEAM_COLORS[0]
+  const myName = TEAM_NAMES[myTeamIdx] ?? 'Your Team'
+
+  const POSITION_ORDER: Partial<Record<Position, number>> = {
+    GK: 0, LB: 1, CB: 2, RB: 3, LM: 4, CM: 5, RM: 6, LW: 7, ST: 8, RW: 9,
+  }
+  const sortedMembers = [...myTeam.members].sort((a, b) =>
+    (POSITION_ORDER[(a as TeamMember).assigned_position as Position] ?? 99) -
+    (POSITION_ORDER[(b as TeamMember).assigned_position as Position] ?? 99)
+  )
+
+  const pitchMembers = myTeam.members.map((m) => ({
+    ...m,
+    preferred_position: m.assigned_position,
+  })) as unknown as PartyMember[]
+
+  const assignedPositions = sortedMembers.map((m) => (m as TeamMember).assigned_position as Position)
 
   if (phase === 'matched_waiting') {
     return (
@@ -414,19 +444,29 @@ function GameScreen({ gameData }: { gameData: NonNullable<ReturnType<typeof useA
           <CardHeader><CardTitle className="text-sm flex items-center gap-2"><Users size={14} /> Your Team ({myTeam.members.length}/7)</CardTitle></CardHeader>
           <CardContent>
             <div className="flex flex-col gap-1.5">
-              {myTeam.members.map((m) => (
-                <div key={m.id} className="flex items-center gap-2">
-                  <div className="w-6 h-6 rounded-full bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 text-[10px] font-bold flex-shrink-0">
-                    {getInitials((m.profile as Profile | null)?.full_name || (m.profile as Profile | null)?.username || '?')}
-                  </div>
-                  <span className="text-xs text-white flex-1 truncate">
-                    {(m.profile as Profile | null)?.full_name || (m.profile as Profile | null)?.username}
-                  </span>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded border font-mono font-semibold ${POSITION_COLORS[(m as TeamMember).assigned_position as Position]}`}>
-                    {(m as TeamMember).assigned_position}
-                  </span>
-                </div>
-              ))}
+              {sortedMembers.map((m) => {
+                const isMe = m.user_id === currentUserId
+                const profile = m.profile as Profile | null
+                return (
+                  <button
+                    key={m.id}
+                    className="flex items-center gap-2 w-full text-left hover:bg-white/5 rounded-lg px-1 py-0.5 transition-colors"
+                    onClick={() => !isMe && navigate(`/profile/${m.user_id}`)}
+                    disabled={isMe}
+                  >
+                    <div className="w-6 h-6 rounded-full bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 text-[10px] font-bold flex-shrink-0">
+                      {getInitials(profile?.full_name || profile?.username || '?')}
+                    </div>
+                    <span className="text-xs text-white flex-1 truncate">
+                      {profile?.full_name || profile?.username}
+                      {isMe && <span className="text-emerald-400 ml-1">(You)</span>}
+                    </span>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded border font-mono font-semibold ${POSITION_COLORS[(m as TeamMember).assigned_position as Position]}`}>
+                      {(m as TeamMember).assigned_position}
+                    </span>
+                  </button>
+                )
+              })}
             </div>
           </CardContent>
         </Card>
@@ -435,64 +475,102 @@ function GameScreen({ gameData }: { gameData: NonNullable<ReturnType<typeof useA
     )
   }
 
+  const visibleMatches = showAllMatches
+    ? allMatches
+    : allMatches.filter((m) => m.team_a_id === myTeam.id || m.team_b_id === myTeam.id)
+
   return (
     <div className="flex flex-col gap-4 animate-fade-in">
-      <div className="pt-2">
-        <h1 className="text-xl font-bold text-white">⚽ You're in a Game!</h1>
-        <p className="text-sm text-muted">Round-robin format — 4 teams, 6 matches</p>
+      {/* Header with game start time + venue */}
+      <div className="pt-2 flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-bold text-white">⚽ You're in a Game!</h1>
+          <p className="text-sm text-muted">Round-robin format — 4 teams, 6 matches</p>
+        </div>
+        <div className="text-right flex-shrink-0">
+          <p className="text-sm font-semibold text-white">
+            Game Start at {allMatches[0]?.scheduled_at ? formatTime(allMatches[0].scheduled_at) : '—'}
+          </p>
+          <p className="text-xs text-muted">{game?.venue ?? ''}</p>
+        </div>
       </div>
 
       {/* My team */}
-      <Card className="border-emerald-500/30">
-        <CardHeader><CardTitle className="text-sm flex items-center gap-2 text-emerald-400"><Users size={14} /> Your Team ({myTeam.members.length}/7)</CardTitle></CardHeader>
+      <Card className={myColor.border}>
+        <CardHeader><CardTitle className={`text-sm flex items-center gap-2 ${myColor.text}`}><Users size={14} /> {myName} ({myTeam.members.length}/7)</CardTitle></CardHeader>
         <CardContent>
-          <div className="flex flex-col gap-1.5">
-            {myTeam.members.map((m) => (
-              <div key={m.id} className="flex items-center gap-2">
-                <div className="w-7 h-7 rounded-full bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 text-[10px] font-bold flex-shrink-0">
-                  {getInitials((m.profile as Profile | null)?.full_name || (m.profile as Profile | null)?.username || '?')}
-                </div>
-                <span className="text-xs text-white flex-1 truncate">
-                  {(m.profile as Profile | null)?.full_name || (m.profile as Profile | null)?.username}
-                </span>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded border font-mono font-semibold ${POSITION_COLORS[(m as TeamMember).assigned_position as Position]}`}>
-                  {(m as TeamMember).assigned_position}
-                </span>
-              </div>
-            ))}
+          <div className="flex gap-3">
+            <div className="flex flex-col gap-1.5 flex-1 min-w-0">
+              {sortedMembers.map((m) => {
+                const isMe = m.user_id === currentUserId
+                const profile = m.profile as Profile | null
+                const displayName = profile?.full_name && profile.full_name.length <= 14
+                  ? profile.full_name
+                  : `@${profile?.username ?? '?'}`
+                return (
+                  <button
+                    key={m.id}
+                    className="flex items-center gap-1.5 w-full text-left hover:bg-white/5 rounded-lg px-1 py-0.5 transition-colors"
+                    onClick={() => !isMe && navigate(`/profile/${m.user_id}`)}
+                    disabled={isMe}
+                  >
+                    <div className={`w-7 h-7 rounded-full ${myColor.bg} border ${myColor.border} flex items-center justify-center ${myColor.text} text-[10px] font-bold flex-shrink-0`}>
+                      {getInitials(profile?.full_name || profile?.username || '?')}
+                    </div>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded border font-mono font-semibold flex-shrink-0 ${POSITION_COLORS[(m as TeamMember).assigned_position as Position]}`}>
+                      {(m as TeamMember).assigned_position}
+                    </span>
+                    <span className="text-xs text-white flex-1 truncate">
+                      {displayName}
+                      {isMe && <span className={`${myColor.text} ml-1`}>(You)</span>}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+            <MiniPitch members={pitchMembers} currentUserId={currentUserId} customPositions={assignedPositions} />
           </div>
         </CardContent>
       </Card>
 
       {/* Match schedule */}
       <Card>
-        <CardHeader><CardTitle className="text-sm">Match Schedule (6 matches)</CardTitle></CardHeader>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm">Match Schedule ({visibleMatches.length} matches)</CardTitle>
+            <button
+              className="text-[10px] text-muted hover:text-white border border-border rounded px-2 py-0.5 transition-colors"
+              onClick={() => setShowAllMatches((v) => !v)}
+            >
+              {showAllMatches ? 'My matches only' : 'Show all'}
+            </button>
+          </div>
+        </CardHeader>
         <CardContent>
           <div className="flex flex-col gap-2">
-            {allMatches.map((match, idx) => {
+            {visibleMatches.map((match) => {
               const isMyMatch = match.team_a_id === myTeam.id || match.team_b_id === myTeam.id
-              const opp = match.opponent
-              const oppName = opp?.members[0]
-                ? `Team ${opp.id.slice(0, 6)}`
-                : 'Unknown'
+              const globalIdx = allMatches.indexOf(match)
+              const ai = teamOrder.indexOf(match.team_a_id)
+              const bi = teamOrder.indexOf(match.team_b_id)
+              const aName = TEAM_NAMES[ai] ?? `Team ${ai + 1}`
+              const bName = TEAM_NAMES[bi] ?? `Team ${bi + 1}`
+              const aColor = TEAM_COLORS[ai] ?? TEAM_COLORS[0]
+              const bColor = TEAM_COLORS[bi] ?? TEAM_COLORS[0]
               return (
                 <div
                   key={match.id}
-                  className={`flex items-center gap-3 p-2 rounded-lg border ${
+                  className={`flex items-center gap-2 p-2 rounded-lg border ${
                     isMyMatch ? 'border-primary/40 bg-primary/5' : 'border-border bg-surface-2'
                   }`}
                 >
-                  <span className="text-xs text-muted w-5 text-center">#{idx + 1}</span>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium text-white truncate">
-                      {isMyMatch ? (
-                        <span className="text-primary">Your team</span>
-                      ) : (
-                        <span>Match {idx + 1}</span>
-                      )}
-                      {isMyMatch && <span className="text-muted"> vs {oppName}</span>}
+                  <span className="text-xs text-muted w-5 text-center flex-shrink-0">#{globalIdx + 1}</span>
+                  <div className="flex-1 min-w-0 text-center">
+                    <p className="text-xs font-medium">
+                      <span className={aColor.text}>{aName}</span>
+                      <span className="text-muted"> vs </span>
+                      <span className={bColor.text}>{bName}</span>
                     </p>
-                    <p className="text-[10px] text-muted">{match.venue}</p>
                   </div>
                   <div className="text-right flex-shrink-0">
                     <p className="text-[10px] text-muted">{formatTime(match.scheduled_at)}</p>

@@ -7,6 +7,15 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export const POSITIONS = ['GK', 'LB', 'CB', 'RB', 'LM', 'CM', 'RM', 'LW', 'RW', 'ST'] as const
+
+export const TEAM_NAMES = ['Red Team', 'Blue Team', 'White Team', 'Green Team'] as const
+
+export const TEAM_COLORS = [
+  { text: 'text-red-400',     bg: 'bg-red-500/20',   border: 'border-red-500/30',   dot: 'bg-red-400' },
+  { text: 'text-blue-400',    bg: 'bg-blue-500/20',  border: 'border-blue-500/30',  dot: 'bg-blue-400' },
+  { text: 'text-slate-200',   bg: 'bg-white/10',     border: 'border-white/20',     dot: 'bg-slate-200' },
+  { text: 'text-emerald-400', bg: 'bg-emerald-500/20', border: 'border-emerald-500/30', dot: 'bg-emerald-400' },
+] as const
 export type Position = typeof POSITIONS[number]
 
 export const ROLE_COLORS: Record<PositionRole, { bright: string; dark: string; hover: string; shadow: string; label: string }> = {
